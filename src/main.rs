@@ -54,7 +54,7 @@ fn handle_pwd() {
 }
 
 fn handle_cd(args: &[&str]) {
-    let target = if args.is_empty() {
+    let target = if args.is_empty() || args[0] == "~" {
         env::var("HOME").unwrap_or_else(|_| "/".to_string())
     } else {
         args[0].to_string()
