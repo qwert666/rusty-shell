@@ -2,6 +2,7 @@
 use std::io::{self, Write};
 use std::env;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     loop {
@@ -33,10 +34,23 @@ fn execute_command(command: &str) -> bool {
                 ["echo", args @ ..] => handle_echo(args),
                 ["type", args @ ..] => handle_type(args),
                 [] => {}
-                _ => println!("{}: command not found", cmd),
+                [command, args @ ..] => handle_external_command(command, args),
             }
             true
         }
+    }
+}
+
+fn handle_external_command(command: &str, args: &[&str]) {
+    if let Some(path) = find_in_path(command) {
+        Command::new(path)
+            .args(args)
+            .spawn()
+            .expect("command failed to start")
+            .wait()
+            .expect("msg");
+    } else {
+        println!("{}: command not found", command);
     }
 }
 
@@ -75,7 +89,7 @@ fn is_executable(path: &Path) -> bool {
     {
         use std::os::unix::fs::PermissionsExt;
         path.metadata()
-            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .map(|m| (m.permissions().mode() & 0o111) != 0)
             .unwrap_or(false)
     }
 }
