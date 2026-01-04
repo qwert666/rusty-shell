@@ -29,6 +29,7 @@ fn execute_command(command: &str) -> bool {
             let parts: Vec<&str> = cmd.split_whitespace().collect();
             match parts.as_slice() {
                 ["echo", args @ ..] => handle_echo(args),
+                ["type", args @ ..] => handle_type(args),
                 [] => {}
                 _ => println!("{}: command not found", cmd),
             }
@@ -39,4 +40,13 @@ fn execute_command(command: &str) -> bool {
 
 fn handle_echo(args: &[&str]) {
     println!("{}", args.join(" "));
+}
+
+fn handle_type(args: &[&str]) {
+    for arg in args {
+        match *arg {
+            "echo" | "exit" | "type" => println!("{} is a shell builtin", arg),
+            _ => println!("{}: not found", arg),
+        }
+    }
 }
