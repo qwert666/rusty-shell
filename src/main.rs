@@ -5,6 +5,9 @@ use std::path::Path;
 use std::process::Command;
 use std::os::unix::process::CommandExt;
 
+const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd"];
+
+
 fn main() {
     loop {
         match read_command() {
@@ -34,16 +37,31 @@ fn execute_command(command: &str) -> bool {
             match parts.as_slice() {
                 ["echo", args @ ..] => handle_echo(args),
                 ["type", args @ ..] => handle_type(args),
-                ["pwd"] => {
-                    if let Ok(path) = env::current_dir() {
-                        println!("{}", path.display());
-                    }
-                }
+                ["cd", args @ ..] => handle_cd(args),
+                ["pwd"] => handle_pwd(),
                 [] => {}
                 [command, args @ ..] => handle_external_command(command, args),
             }
             true
         }
+    }
+}
+
+fn handle_pwd() {
+    if let Ok(path) = env::current_dir() {
+        println!("{}", path.display());
+    }
+}
+
+fn handle_cd(args: &[&str]) {
+    let target = if args.is_empty() {
+        env::var("HOME").unwrap_or_else(|_| "/".to_string())
+    } else {
+        args[0].to_string()
+    };
+    
+    if let Err(_) = env::set_current_dir(&target) {
+        println!("cd: {}: No such file or directory", target);
     }
 }
 
@@ -66,7 +84,7 @@ fn handle_echo(args: &[&str]) {
 }
 
 fn is_builtin(cmd: &str) -> bool {
-    matches!(cmd, "echo" | "exit" | "type" | "pwd")
+    BUILTINS.contains(&cmd)
 }
 
 fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
