@@ -34,6 +34,11 @@ fn execute_command(command: &str) -> bool {
             match parts.as_slice() {
                 ["echo", args @ ..] => handle_echo(args),
                 ["type", args @ ..] => handle_type(args),
+                ["pwd"] => {
+                    if let Ok(path) = env::current_dir() {
+                        println!("{}", path.display());
+                    }
+                }
                 [] => {}
                 [command, args @ ..] => handle_external_command(command, args),
             }
@@ -61,7 +66,7 @@ fn handle_echo(args: &[&str]) {
 }
 
 fn is_builtin(cmd: &str) -> bool {
-    matches!(cmd, "echo" | "exit" | "type")
+    matches!(cmd, "echo" | "exit" | "type" | "pwd")
 }
 
 fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
