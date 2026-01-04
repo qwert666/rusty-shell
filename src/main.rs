@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::env;
 use std::path::Path;
 use std::process::Command;
+use std::os::unix::process::CommandExt;
 
 fn main() {
     loop {
@@ -44,11 +45,12 @@ fn execute_command(command: &str) -> bool {
 fn handle_external_command(command: &str, args: &[&str]) {
     if let Some(path) = find_in_path(command) {
         Command::new(path)
+            .arg0(command)
             .args(args)
             .spawn()
             .expect("command failed to start")
             .wait()
-            .expect("msg");
+            .expect("command wasn't running");
     } else {
         println!("{}: command not found", command);
     }
