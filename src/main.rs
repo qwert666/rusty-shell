@@ -33,12 +33,13 @@ fn execute_command(command: &str) -> bool {
     match command {
         "exit" => false,
         cmd => {
-            let parts: Vec<&str> = cmd.split_whitespace().collect();
+            let parts = parse_command(cmd);
+
             match parts.as_slice() {
-                ["echo", args @ ..] => handle_echo(args),
-                ["type", args @ ..] => handle_type(args),
-                ["cd", args @ ..] => handle_cd(args),
-                ["pwd"] => handle_pwd(),
+                [cmd, args @ ..] if cmd == "echo" => handle_echo(args),
+                [cmd, args @ ..] if cmd == "type" => handle_type(args),
+                [cmd, args @ ..] if cmd == "cd" => handle_cd(args),
+                [cmd] if cmd == "pwd" => handle_pwd(),
                 [] => {}
                 [command, args @ ..] => handle_external_command(command, args),
             }
@@ -47,13 +48,43 @@ fn execute_command(command: &str) -> bool {
     }
 }
 
+fn parse_command(input: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut chars = input.chars();
+    
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => {
+                in_single_quote = !in_single_quote;
+            }
+            ' ' | '\t' if !in_single_quote => {
+                if !current.is_empty() {
+                    parts.push(current);
+                    current = String::new();
+                }
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+    
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    
+    parts
+}
+
 fn handle_pwd() {
     if let Ok(path) = env::current_dir() {
         println!("{}", path.display());
     }
 }
 
-fn handle_cd(args: &[&str]) {
+fn handle_cd(args: &[String]) {
     let target = if args.is_empty() || args[0] == "~" {
         env::var("HOME").unwrap_or_else(|_| "/".to_string())
     } else {
@@ -65,7 +96,7 @@ fn handle_cd(args: &[&str]) {
     }
 }
 
-fn handle_external_command(command: &str, args: &[&str]) {
+fn handle_external_command(command: &str, args: &[String]) {
     if let Some(path) = find_in_path(command) {
         Command::new(path)
             .arg0(command)
@@ -79,7 +110,7 @@ fn handle_external_command(command: &str, args: &[&str]) {
     }
 }
 
-fn handle_echo(args: &[&str]) {
+fn handle_echo(args: &[String]) {
     println!("{}", args.join(" "));
 }
 
@@ -98,7 +129,7 @@ fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
     })
 }
 
-fn handle_type(args: &[&str]) {
+fn handle_type(args: &[String]) {
     for arg in args {
         if is_builtin(arg) {
             println!("{} is a shell builtin", arg);
