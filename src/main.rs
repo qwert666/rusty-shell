@@ -1,5 +1,7 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
+use std::env;
+use std::path::Path;
 
 fn main() {
     loop {
@@ -42,11 +44,38 @@ fn handle_echo(args: &[&str]) {
     println!("{}", args.join(" "));
 }
 
+fn is_builtin(cmd: &str) -> bool {
+    matches!(cmd, "echo" | "exit" | "type")
+}
+
+fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
+    env::var("PATH").ok()?.split(':').find_map(|dir| {
+        let full_path = Path::new(dir).join(cmd);
+        if full_path.is_file() && is_executable(&full_path) {
+            Some(full_path)
+        } else {
+            None
+        }
+    })
+}
+
 fn handle_type(args: &[&str]) {
     for arg in args {
-        match *arg {
-            "echo" | "exit" | "type" => println!("{} is a shell builtin", arg),
-            _ => println!("{}: not found", arg),
+        if is_builtin(arg) {
+            println!("{} is a shell builtin", arg);
+        } else if let Some(path) = find_in_path(arg) {
+            println!("{} is {}", arg, path.display());
+        } else {
+            println!("{}: not found", arg);
         }
+    }
+}
+
+fn is_executable(path: &Path) -> bool {
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
     }
 }
