@@ -44,7 +44,7 @@ fn execute_command(command: &str) -> bool {
                 [cmd, args @ ..] if cmd == "cd" => handle_cd(args),
                 [cmd] if cmd == "pwd" => handle_pwd(),
                 [] => {}
-                [command, args @ ..] => handle_external_command(command, args),
+                [command, args @ ..] => handle_external_command(command, args, output_file.as_deref()),
             }
             true
         }
@@ -66,7 +66,7 @@ fn parse_command(input: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_single_quote = false;
     let mut in_double_quote = false;
-    let mut chars = input.chars();
+    let mut chars = input.chars().peekable();
     
     while let Some(ch) = chars.next() {
         let is_unquoted = !in_single_quote && !in_double_quote;
@@ -100,6 +100,21 @@ fn parse_command(input: &str) -> Vec<String> {
             '\"' if !in_single_quote => {
                 in_double_quote = !in_double_quote;
             }
+            '1' if is_unquoted && chars.peek() == Some(&'>') => {
+                if !current.is_empty() {
+                    parts.push(current);
+                    current = String::new();
+                }
+                chars.next(); // consume '>'
+                parts.push("1>".to_string());
+            }
+            '>' if is_unquoted => {
+                if !current.is_empty() {
+                    parts.push(current);
+                    current = String::new();
+                }
+                parts.push(">".to_string());
+            }
             _ => {
                 current.push(ch);
             }
@@ -131,12 +146,18 @@ fn handle_cd(args: &[String]) {
     }
 }
 
-fn handle_external_command(command: &str, args: &[String]) {
+fn handle_external_command(command: &str, args: &[String], output_file: Option<&str>) {
     if let Some(path) = find_in_path(command) {
-        Command::new(path)
-            .arg0(command)
-            .args(args)
-            .spawn()
+        let mut cmd = Command::new(path);
+        cmd.arg0(command).args(args);
+        
+        if let Some(file) = output_file {
+            if let Ok(file) = File::create(file) {
+                cmd.stdout(std::process::Stdio::from(file));
+            }
+        }
+        
+        cmd.spawn()
             .expect("command failed to start")
             .wait()
             .expect("command wasn't running");
