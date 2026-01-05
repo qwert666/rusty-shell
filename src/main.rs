@@ -4,6 +4,7 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 use std::os::unix::process::CommandExt;
+use std::fs::File;
 
 const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd"];
 
@@ -34,9 +35,11 @@ fn execute_command(command: &str) -> bool {
         "exit" => false,
         cmd => {
             let parts = parse_command(cmd);
+            let (cmd_parts, output_file) = extract_redirection(&parts);
 
-            match parts.as_slice() {
-                [cmd, args @ ..] if cmd == "echo" => handle_echo(args),
+
+            match cmd_parts.as_slice() {
+                [cmd, args @ ..] if cmd == "echo" => handle_echo(args, output_file.as_deref()),
                 [cmd, args @ ..] if cmd == "type" => handle_type(args),
                 [cmd, args @ ..] if cmd == "cd" => handle_cd(args),
                 [cmd] if cmd == "pwd" => handle_pwd(),
@@ -45,6 +48,16 @@ fn execute_command(command: &str) -> bool {
             }
             true
         }
+    }
+}
+
+fn extract_redirection(parts: &[String]) -> (Vec<String>, Option<String>) {
+    if let Some(pos) = parts.iter().position(|p| p == ">" || p == "1>") {
+        let cmd_parts = parts[..pos].to_vec();
+        let output_file = parts.get(pos + 1).cloned();
+        (cmd_parts, output_file)
+    } else {
+        (parts.to_vec(), None)
     }
 }
 
@@ -132,8 +145,24 @@ fn handle_external_command(command: &str, args: &[String]) {
     }
 }
 
-fn handle_echo(args: &[String]) {
-    println!("{}", args.join(" "));
+fn handle_echo(args: &[String], output_file: Option<&str>) {
+    let output = args.join(" ");
+    write_output(&output, output_file);
+}
+
+fn write_output(content: &str, output_file: Option<&str>) {
+    if let Some(file_path) = output_file {
+        match File::create(file_path) {
+            Ok(mut file) => {
+                writeln!(file, "{}", content).ok();
+            }
+            Err(e) => {
+                eprintln!("Error writing to {}: {}", file_path, e);
+            }
+        }
+    } else {
+        println!("{}", content);
+    }
 }
 
 fn is_builtin(cmd: &str) -> bool {
