@@ -56,11 +56,18 @@ fn parse_command(input: &str) -> Vec<String> {
     let mut chars = input.chars();
     
     while let Some(ch) = chars.next() {
+        let is_unquoted = !in_single_quote && !in_double_quote;
+
         match ch {
+            '\\' if is_unquoted => {
+                if let Some(next_ch) = chars.next() {
+                    current.push(next_ch);
+                }
+            }
             '\'' if !in_double_quote => {
                 in_single_quote = !in_single_quote;
             }
-            ' ' | '\t' if !in_single_quote && !in_double_quote => {
+            ' ' | '\t' if is_unquoted => {
                 if !current.is_empty() {
                     parts.push(current);
                     current = String::new();
@@ -144,12 +151,9 @@ fn handle_type(args: &[String]) {
         }
     }
 }
-
 fn is_executable(path: &Path) -> bool {
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .map(|m| (m.permissions().mode() & 0o111) != 0)
-            .unwrap_or(false)
-    }
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|m| (m.permissions().mode() & 0o111) != 0)
+        .unwrap_or(false)
 }
