@@ -52,18 +52,22 @@ fn parse_command(input: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut in_single_quote = false;
+    let mut in_double_quote = false;
     let mut chars = input.chars();
     
     while let Some(ch) = chars.next() {
         match ch {
-            '\'' => {
+            '\'' if !in_double_quote => {
                 in_single_quote = !in_single_quote;
             }
-            ' ' | '\t' if !in_single_quote => {
+            ' ' | '\t' if !in_single_quote && !in_double_quote => {
                 if !current.is_empty() {
                     parts.push(current);
                     current = String::new();
                 }
+            }
+            '\"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
             }
             _ => {
                 current.push(ch);
