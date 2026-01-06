@@ -13,12 +13,22 @@ struct Redirection {
     stdout: Option<String>,
     stdout_append: bool,
     stderr: Option<String>,
+    stderr_append: bool,
 }
 
 impl Redirection {
     fn setup_files(&self) {
         if let Some(path) = &self.stderr {
-            File::create(path).ok();
+            use std::fs::OpenOptions;
+            if self.stderr_append {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .ok();
+            } else {
+                File::create(path).ok();
+            }
         }
     }
     
@@ -39,7 +49,17 @@ impl Redirection {
             }
         }
         if let Some(path) = &self.stderr {
-            if let Ok(file) = File::create(path) {
+            use std::fs::OpenOptions;
+            let file_result = if self.stderr_append {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+            } else {
+                File::create(path)
+            };
+            
+            if let Ok(file) = file_result {
                 cmd.stderr(std::process::Stdio::from(file));
             }
         }
@@ -178,7 +198,13 @@ fn handle_redirection_operator(
         }
         ('2', Some(&'>')) => {
             chars.next();
-            "2>"
+            // Check for 2>>
+            if chars.peek() == Some(&'>') {
+                chars.next();
+                "2>>"
+            } else {
+                "2>"
+            }
         }
         _ => return false,
     };
@@ -218,6 +244,16 @@ fn extract_redirection(tokens: Vec<String>) -> ParsedCommand {
             "2>" => {
                 if let Some(file) = tokens.get(i + 1) {
                     redirection.stderr = Some(file.clone());
+                    redirection.stderr_append = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            "2>>" => {
+                if let Some(file) = tokens.get(i + 1) {
+                    redirection.stderr = Some(file.clone());
+                    redirection.stderr_append = true;
                     i += 2;
                 } else {
                     i += 1;
