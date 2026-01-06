@@ -1,13 +1,44 @@
-#[allow(unused_imports)]
 use std::io::{self, Write};
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::os::unix::process::CommandExt;
+use std::os::unix::fs::PermissionsExt;
 use std::fs::File;
 
 const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd"];
 
+#[derive(Default)]
+struct Redirection {
+    stdout: Option<String>,
+    stderr: Option<String>,
+}
+
+impl Redirection {
+    fn setup_files(&self) {
+        if let Some(path) = &self.stderr {
+            File::create(path).ok();
+        }
+    }
+    
+    fn apply_to_command(&self, cmd: &mut Command) {
+        if let Some(path) = &self.stdout {
+            if let Ok(file) = File::create(path) {
+                cmd.stdout(std::process::Stdio::from(file));
+            }
+        }
+        if let Some(path) = &self.stderr {
+            if let Ok(file) = File::create(path) {
+                cmd.stderr(std::process::Stdio::from(file));
+            }
+        }
+    }
+}
+
+struct ParsedCommand {
+    parts: Vec<String>,
+    redirection: Redirection,
+}
 
 fn main() {
     loop {
@@ -22,7 +53,7 @@ fn main() {
     }
 }
 
-fn read_command() -> Result<String, std::io::Error> {
+fn read_command() -> Result<String, io::Error> {
     print!("$ ");
     io::stdout().flush()?;
     let mut command = String::new();
@@ -31,38 +62,30 @@ fn read_command() -> Result<String, std::io::Error> {
 }
 
 fn execute_command(command: &str) -> bool {
-    match command {
-        "exit" => false,
-        cmd => {
-            let parts = parse_command(cmd);
-            let (cmd_parts, output_file) = extract_redirection(&parts);
+    if command == "exit" {
+        return false;
+    }
 
-
-            match cmd_parts.as_slice() {
-                [cmd, args @ ..] if cmd == "echo" => handle_echo(args, output_file.as_deref()),
-                [cmd, args @ ..] if cmd == "type" => handle_type(args),
-                [cmd, args @ ..] if cmd == "cd" => handle_cd(args),
-                [cmd] if cmd == "pwd" => handle_pwd(),
-                [] => {}
-                [command, args @ ..] => handle_external_command(command, args, output_file.as_deref()),
-            }
-            true
+    let tokens = tokenize(command);
+    let parsed = extract_redirection(tokens);
+    
+    match parsed.parts.as_slice() {
+        [] => {}
+        [cmd, args @ ..] if *cmd == "echo" => {
+            parsed.redirection.setup_files();
+            handle_echo(args, parsed.redirection.stdout.as_deref());
         }
+        [cmd, args @ ..] if *cmd == "type" => handle_type(args),
+        [cmd, args @ ..] if *cmd == "cd" => handle_cd(args),
+        [cmd] if *cmd == "pwd" => handle_pwd(),
+        [cmd, args @ ..] => handle_external_command(cmd, args, &parsed.redirection),
     }
+    true
 }
 
-fn extract_redirection(parts: &[String]) -> (Vec<String>, Option<String>) {
-    if let Some(pos) = parts.iter().position(|p| p == ">" || p == "1>") {
-        let cmd_parts = parts[..pos].to_vec();
-        let output_file = parts.get(pos + 1).cloned();
-        (cmd_parts, output_file)
-    } else {
-        (parts.to_vec(), None)
-    }
-}
 
-fn parse_command(input: &str) -> Vec<String> {
-    let mut parts = Vec::new();
+fn tokenize(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_single_quote = false;
     let mut in_double_quote = false;
@@ -93,27 +116,18 @@ fn parse_command(input: &str) -> Vec<String> {
             }
             ' ' | '\t' if is_unquoted => {
                 if !current.is_empty() {
-                    parts.push(current);
-                    current = String::new();
+                    tokens.push(std::mem::take(&mut current));
                 }
             }
             '\"' if !in_single_quote => {
                 in_double_quote = !in_double_quote;
             }
-            '1' if is_unquoted && chars.peek() == Some(&'>') => {
-                if !current.is_empty() {
-                    parts.push(current);
-                    current = String::new();
+            // DRY: Extract operator handling
+            c @ ('1' | '2' | '>') if is_unquoted => {
+                if handle_redirection_operator(c, &mut chars, &mut current, &mut tokens) {
+                    continue;
                 }
-                chars.next(); // consume '>'
-                parts.push("1>".to_string());
-            }
-            '>' if is_unquoted => {
-                if !current.is_empty() {
-                    parts.push(current);
-                    current = String::new();
-                }
-                parts.push(">".to_string());
+                current.push(ch);
             }
             _ => {
                 current.push(ch);
@@ -122,10 +136,65 @@ fn parse_command(input: &str) -> Vec<String> {
     }
     
     if !current.is_empty() {
-        parts.push(current);
+        tokens.push(current);
     }
     
-    parts
+    tokens
+}
+
+
+fn handle_redirection_operator(
+    ch: char,
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+    current: &mut String,
+    tokens: &mut Vec<String>,
+) -> bool {
+    let operator = match (ch, chars.peek()) {
+        ('>', _) => ">",
+        ('1', Some(&'>')) => {
+            chars.next();
+            "1>"
+        }
+        ('2', Some(&'>')) => {
+            chars.next();
+            "2>"
+        }
+        _ => return false,
+    };
+    
+    if !current.is_empty() {
+        tokens.push(std::mem::take(current));
+    }
+    tokens.push(operator.to_string());
+    true
+}
+
+fn extract_redirection(tokens: Vec<String>) -> ParsedCommand {
+    let mut redirection = Redirection::default();
+    let mut cmd_parts = Vec::new();
+    let mut i = 0;
+    
+    while i < tokens.len() {
+        let redirect_target = match tokens[i].as_str() {
+            ">" | "1>" => Some(&mut redirection.stdout),
+            "2>" => Some(&mut redirection.stderr),
+            _ => None,
+        };
+        
+        if let Some(target) = redirect_target {
+            if let Some(file) = tokens.get(i + 1) {
+                *target = Some(file.clone());
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else {
+            cmd_parts.push(tokens[i].clone());
+            i += 1;
+        }
+    }
+    
+    ParsedCommand { parts: cmd_parts, redirection }
 }
 
 fn handle_pwd() {
@@ -135,54 +204,41 @@ fn handle_pwd() {
 }
 
 fn handle_cd(args: &[String]) {
-    let target = if args.is_empty() || args[0] == "~" {
-        env::var("HOME").unwrap_or_else(|_| "/".to_string())
-    } else {
-        args[0].to_string()
+    let target = match args.first().map(String::as_str) {
+        None | Some("~") => env::var("HOME").unwrap_or_else(|_| "/".to_string()),
+        Some(path) => path.to_string(),
     };
     
-    if let Err(_) = env::set_current_dir(&target) {
+    if env::set_current_dir(&target).is_err() {
         println!("cd: {}: No such file or directory", target);
     }
 }
 
-fn handle_external_command(command: &str, args: &[String], output_file: Option<&str>) {
-    if let Some(path) = find_in_path(command) {
-        let mut cmd = Command::new(path);
-        cmd.arg0(command).args(args);
-        
-        if let Some(file) = output_file {
-            if let Ok(file) = File::create(file) {
-                cmd.stdout(std::process::Stdio::from(file));
-            }
+fn handle_external_command(command: &str, args: &[String], redirection: &Redirection) {
+    match find_in_path(command) {
+        Some(path) => {
+            let mut cmd = Command::new(path);
+            cmd.arg0(command).args(args);
+            redirection.apply_to_command(&mut cmd);
+            
+            cmd.spawn()
+                .expect("command failed to start")
+                .wait()
+                .expect("command wasn't running");
         }
-        
-        cmd.spawn()
-            .expect("command failed to start")
-            .wait()
-            .expect("command wasn't running");
-    } else {
-        println!("{}: command not found", command);
+        None => println!("{}: command not found", command),
     }
 }
 
 fn handle_echo(args: &[String], output_file: Option<&str>) {
     let output = args.join(" ");
-    write_output(&output, output_file);
-}
-
-fn write_output(content: &str, output_file: Option<&str>) {
+    
     if let Some(file_path) = output_file {
-        match File::create(file_path) {
-            Ok(mut file) => {
-                writeln!(file, "{}", content).ok();
-            }
-            Err(e) => {
-                eprintln!("Error writing to {}: {}", file_path, e);
-            }
+        if let Ok(mut file) = File::create(file_path) {
+            writeln!(file, "{}", output).ok();
         }
     } else {
-        println!("{}", content);
+        println!("{}", output);
     }
 }
 
@@ -190,14 +246,10 @@ fn is_builtin(cmd: &str) -> bool {
     BUILTINS.contains(&cmd)
 }
 
-fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
+fn find_in_path(cmd: &str) -> Option<PathBuf> {
     env::var("PATH").ok()?.split(':').find_map(|dir| {
         let full_path = Path::new(dir).join(cmd);
-        if full_path.is_file() && is_executable(&full_path) {
-            Some(full_path)
-        } else {
-            None
-        }
+        (full_path.is_file() && is_executable(&full_path)).then_some(full_path)
     })
 }
 
@@ -212,8 +264,8 @@ fn handle_type(args: &[String]) {
         }
     }
 }
+
 fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
     path.metadata()
         .map(|m| (m.permissions().mode() & 0o111) != 0)
         .unwrap_or(false)
