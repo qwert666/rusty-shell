@@ -11,6 +11,7 @@ const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd"];
 #[derive(Default)]
 struct Redirection {
     stdout: Option<String>,
+    stdout_append: bool,
     stderr: Option<String>,
 }
 
@@ -23,7 +24,17 @@ impl Redirection {
     
     fn apply_to_command(&self, cmd: &mut Command) {
         if let Some(path) = &self.stdout {
-            if let Ok(file) = File::create(path) {
+            use std::fs::OpenOptions;
+            let file_result = if self.stdout_append {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+            } else {
+                File::create(path)
+            };
+            
+            if let Ok(file) = file_result {
                 cmd.stdout(std::process::Stdio::from(file));
             }
         }
@@ -73,7 +84,7 @@ fn execute_command(command: &str) -> bool {
         [] => {}
         [cmd, args @ ..] if *cmd == "echo" => {
             parsed.redirection.setup_files();
-            handle_echo(args, parsed.redirection.stdout.as_deref());
+            handle_echo(args, &parsed.redirection);
         }
         [cmd, args @ ..] if *cmd == "type" => handle_type(args),
         [cmd, args @ ..] if *cmd == "cd" => handle_cd(args),
@@ -150,10 +161,20 @@ fn handle_redirection_operator(
     tokens: &mut Vec<String>,
 ) -> bool {
     let operator = match (ch, chars.peek()) {
+        ('>', Some(&'>')) => {
+            chars.next();
+            ">>"
+        }
         ('>', _) => ">",
         ('1', Some(&'>')) => {
             chars.next();
-            "1>"
+            // Check for 1>>
+            if chars.peek() == Some(&'>') {
+                chars.next();
+                "1>>"
+            } else {
+                "1>"
+            }
         }
         ('2', Some(&'>')) => {
             chars.next();
@@ -175,22 +196,37 @@ fn extract_redirection(tokens: Vec<String>) -> ParsedCommand {
     let mut i = 0;
     
     while i < tokens.len() {
-        let redirect_target = match tokens[i].as_str() {
-            ">" | "1>" => Some(&mut redirection.stdout),
-            "2>" => Some(&mut redirection.stderr),
-            _ => None,
-        };
-        
-        if let Some(target) = redirect_target {
-            if let Some(file) = tokens.get(i + 1) {
-                *target = Some(file.clone());
-                i += 2;
-            } else {
+        match tokens[i].as_str() {
+            ">" | "1>" => {
+                if let Some(file) = tokens.get(i + 1) {
+                    redirection.stdout = Some(file.clone());
+                    redirection.stdout_append = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            ">>" | "1>>" => {
+                if let Some(file) = tokens.get(i + 1) {
+                    redirection.stdout = Some(file.clone());
+                    redirection.stdout_append = true;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            "2>" => {
+                if let Some(file) = tokens.get(i + 1) {
+                    redirection.stderr = Some(file.clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => {
+                cmd_parts.push(tokens[i].clone());
                 i += 1;
             }
-        } else {
-            cmd_parts.push(tokens[i].clone());
-            i += 1;
         }
     }
     
@@ -230,11 +266,21 @@ fn handle_external_command(command: &str, args: &[String], redirection: &Redirec
     }
 }
 
-fn handle_echo(args: &[String], output_file: Option<&str>) {
+fn handle_echo(args: &[String], redirection: &Redirection) {
     let output = args.join(" ");
     
-    if let Some(file_path) = output_file {
-        if let Ok(mut file) = File::create(file_path) {
+    if let Some(file_path) = &redirection.stdout {
+        use std::fs::OpenOptions;
+        let file_result = if redirection.stdout_append {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file_path)
+        } else {
+            File::create(file_path)
+        };
+        
+        if let Ok(mut file) = file_result {
             writeln!(file, "{}", output).ok();
         }
     } else {
